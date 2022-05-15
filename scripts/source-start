@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Add this script's path to your icecast <on-connect>
+
+echo "[$(date)] gasconheart has started streaming at https://radio.dot.org.es/stream.ogg" > /tmp/mpdbot_relay.sock &

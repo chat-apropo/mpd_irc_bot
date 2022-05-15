@@ -1,5 +1,5 @@
-import logging
 import filecmp
+import logging
 import os
 import shlex
 import subprocess
@@ -18,10 +18,12 @@ YT_VALID_VIDEO_DOMAINS = ["youtube.com", "youtu.be"]
 logger = logging.getLogger()
 
 class MaxFilesize(Exception):
-    pass
+    def __str__(self):
+        return "Max allowed filesize is: {}MB".format(MAX_FILE_SIZE // 1024**2)
 
 class MaxAudioLength(Exception):
-    pass
+    def __str__(self):
+        return "Max allowed audio length is: {}min".format(MAX_AUDIO_LENGTH // 60)
 
 class FailedToProcess(Exception):
     pass
@@ -30,7 +32,8 @@ class FailedToDownload(Exception):
     pass
 
 class ExtensionNotAllowed(Exception):
-    pass
+    def __str__(self):
+        return "Allowed extensions are {}".format(AUDIO_EXTENSIONS)
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -65,6 +68,9 @@ def move_file(from_path: str, raw_filename: str, out_dir: str, suffix: str):
             os.remove(from_path)
             return return_path
         return move_file(from_path, raw_filename, out_dir, "_" + suffix)
+    out_dir = os.path.expanduser(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    logger.debug(f"{out_dir=}")
     os.rename(from_path, return_path)
     logger.info(f"Downloaded file to {return_path=}")
     return return_path
