@@ -18,45 +18,52 @@ create passwords for authorized users to use the openmic
 # https://www.youtube.com/watch?v=3rW7Vpep3II 
 
 import datetime
+import json
 import logging
 import os
 import re
 import threading
-from pathlib import Path
 from functools import wraps
+from pathlib import Path
+from typing import List, Union
 
 import trio
 import validators
-from typing import Union, List
 from cachetools import TTLCache
 from IrcBot.bot import Color, IrcBot, Message, utils
 from IrcBot.dcc import DccServer
 from IrcBot.utils import debug, log
+from slugify import slugify
 
 # import all excetions
-from audio_download import (ExtensionNotAllowed, FailedToDownload,
+from audio_download import (MAX_AUDIO_LENGTH, MAX_FILE_SIZE,
+                            ExtensionNotAllowed, FailedToDownload,
                             FailedToProcess, MaxAudioLength, MaxFilesize,
                             download_audio)
 from message_server import listen_loop
 from mpd_client import MPDClient, mpd_loop_with_handler
+from utils import config
 
-LOGFILE = None
-LOG_LEVEL = logging.DEBUG
-ADMINS = ["mattf", "gasconheart"]
-HOST = 'irc.dot.org.es'
-PORT = 6697
-NICK = '_mpdbot'
-PASSWORD = ''
-CHANNELS = ["#bots"]
-DCC_HOST = "127.0.0.1"
-MUSIC_DIR = "~/music/mpdbot"
-ICECAST_CONFIG = "/etc/icecast.xml"
-MESSAGE_RELAY_FIFO_PATH = "/tmp/mpdbot_relay.sock"
-MPD_HOST = "localhost"
-MPD_PORT = 6600
-MPD_FOLDER = "~/music/"
-MAX_USER_QUEUE_LENGTH = 3
-PREFIX = "!"
+LOGFILE = config["log"]["LOGFILE"]
+if LOGFILE == "None":
+    LOGFILE = None
+LOG_LEVEL = int(config["log"]["LOG_LEVEL"])
+ADMINS = json.loads(config["bot"]["ADMINS"])
+HOST = config["irc"]["HOST"]
+PORT = int(config["irc"]["PORT"])
+NICK = config["irc"]["NICK"]
+PASSWORD = config["irc"]["PASSWORD"]
+CHANNELS = json.loads(config["irc"]["CHANNELS"])
+DCC_HOST = config["irc"]["DCC_HOST"]
+DCC_PORTS = [int(port) for port in json.loads(config["irc"]["DCC_PORTS"])]
+MUSIC_DIR = config["mpd"]["MUSIC_DIR"]
+ICECAST_CONFIG = config["bot"]["ICECAST_CONFIG"]
+MESSAGE_RELAY_FIFO_PATH = config["bot"]["MESSAGE_RELAY_FIFO_PATH"]
+MPD_HOST = config["mpd"]["MPD_HOST"]
+MPD_PORT = int(config["mpd"]["MPD_PORT"])
+MPD_FOLDER = config["mpd"]["MPD_FOLDER"]
+MAX_USER_QUEUE_LENGTH = int(config["mpd"]["MAX_USER_QUEUE_LENGTH"])
+PREFIX = config["bot"]["PREFIX"]
 
 
 utils.setPrefix(PREFIX)
@@ -95,57 +102,6 @@ def admin_command(*m_args, **m_kwargs):
 
 def non_numeric_arg(args: re.Match, i: int):
     return not args or not args.group(i) or not args.group(i).isdigit()
-
-@utils.custom_handler("dccsend")
-async def on_dcc_send(bot: IrcBot, **m):
-    nick = m["nick"]
-    if not await is_identified(bot, nick):
-        await bot.dcc_reject(DccServer.SEND, nick, m["filename"])
-        await bot.send_message(
-            "You cannot use this bot before you register your nick", nick
-        )
-        return
-
-    notify_each_b = progress_curve(m["size"])
-
-    config = Config.get(nick)
-
-    async def progress_handler(p, message):
-        if not config.display_progress:
-            return
-        percentile = int(p * 100)
-        if percentile % notify_each_b == 0:
-            await bot.send_message(message % percentile, m["nick"])
-
-    folder = Folder(nick)
-    if folder.size() + int(m["size"]) > int(Config.get(nick).quota) * 1048576:
-        await bot.send_message(
-            Message(
-                m["nick"],
-                message="Your quota has exceeded! Type 'info' to check, 'list' to see your files and 'delete [filename]' to free some space",
-                is_private=True,
-            )
-        )
-        return
-
-    path = folder.download_path(m["filename"])
-    await bot.dcc_get(
-        str(path),
-        m,
-        progress_callback=lambda _, p: progress_handler(
-            p, f"UPLOAD {Path(m['filename']).name} %s%%"
-        ),
-    )
-    await bot.send_message(
-        Message(
-            m["nick"], message=f"{m['filename']} has been received!", is_private=True
-        )
-    )
-
-
-@utils.custom_handler("dccreject")
-def on_dcc_reject(**m):
-    log(f"Rejected!!! {m=}")
 
 async def is_identified(bot: IrcBot, nick: str) -> bool:
     global nick_cache
@@ -306,6 +262,60 @@ async def move(bot: IrcBot, args: re.Match, msg: Message):
     except Exception:
         await reply(bot, msg, "Failed to move!")
 
+@utils.custom_handler("dccsend")
+async def on_dcc_send(bot: IrcBot, **m):
+    nick = m["nick"]
+    if not await is_identified(bot, nick):
+        await bot.dcc_reject(DccServer.SEND, nick, m["filename"])
+        await bot.send_message(
+            "You cannot use this bot before you register your nick", nick
+        )
+        return
+
+    def progress_curve(filesize):
+        notify_each_b = min(10, max(1, 10 - 10 * filesize // 1024 ** 3))
+        return min([1, 2, 5, 10], key=lambda x: abs(x - notify_each_b))
+
+    notify_each_b = progress_curve(m["size"])
+
+    async def progress_handler(p, message):
+        percentile = int(p * 100)
+        if percentile % notify_each_b == 0:
+            await bot.send_message(message % percentile, m["nick"])
+
+    if int(m["size"]) > MAX_FILE_SIZE:
+        await bot.send_message(
+            f"File too big! Max file size is {MAX_FILE_SIZE} bytes", m["nick"]
+        )
+        return
+
+    path = Path(MPD_FOLDER).expanduser() / Path(slugify(m["filename"])) / Path(NICK) / Path(m["filename"])
+    await bot.dcc_get(
+        str(path),
+        m,
+        progress_callback=lambda _, p: progress_handler(
+            p, f"UPLOAD {Path(m['filename']).name} %s%%"
+        ),
+    )
+    await bot.send_message(
+        Message(
+            m["nick"], message=f"{m['filename']} has been received!", is_private=True
+        )
+    )
+    mpd_client.add_next(str(path))
+    await bot.send_message(
+        Message(
+            m["nick"],
+            message=f"{m['filename']} has been added to the playlist!",
+            is_private=True,
+        )
+    )
+
+
+@utils.custom_handler("dccreject")
+def on_dcc_reject(**m):
+    logger.info(f"User Rejected {m=}")
+
 
 async def onconnect(bot: IrcBot):
     async def message_handler(text):
@@ -331,5 +341,5 @@ utils.setHelpBottom("You can learn more about sonic pi at: https://sonic-pi.net/
 
 if __name__ == "__main__":
     utils.setLogging(LOG_LEVEL, LOGFILE)
-    bot = IrcBot(HOST, PORT, NICK, CHANNELS, PASSWORD, use_ssl=PORT == 6697, dcc_host=DCC_HOST)
+    bot = IrcBot(HOST, PORT, NICK, CHANNELS, PASSWORD, use_ssl=PORT == 6697, dcc_host=DCC_HOST, dcc_ports=DCC_PORTS)
     bot.runWithCallback(onconnect)

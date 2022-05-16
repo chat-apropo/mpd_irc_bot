@@ -1,0 +1,30 @@
+[irc]
+HOST = 'irc.dot.org.es'
+PORT = 6697
+NICK = '_mpdbot'
+PASSWORD = ''
+CHANNELS = ["#bots"]
+# Use your WAN IP
+DCC_HOST = "0.0.0.0"
+DCC_PORTS = ["4990", "4991", "4992", "4993", "4994", "4995", "4996", "4997", "4998", "4999"]
+[log]
+LOGFILE = None
+# CRITICAL = 50, FATAL = CRITICAL, ERROR = 40, WARNING = 30, WARN = WARNING, INFO = 20, DEBUG = 10
+LOG_LEVEL = logging.DEBUG
+[bot]
+# Users that can run admin commands
+ADMINS = ["mattf", "gasconheart"]
+ICECAST_CONFIG = "/etc/icecast.xml"
+MESSAGE_RELAY_FIFO_PATH = "/tmp/mpdbot_relay.sock"
+PREFIX = "!"
+[mpd]
+MPD_HOST = "localhost"
+MPD_PORT = 6600
+MPD_FOLDER = "~/music/"
+MUSIC_DIR = "~/music/mpdbot"
+MAX_USER_QUEUE_LENGTH = 3
+[download]
+AUDIO_EXTENSIONS = {"wav", "mp3", "ogg", "flac", "aiff", "wma", "m4a"}
+MAX_AUDIO_LENGTH = 1800
+MAX_FILE_SIZE = 41943040
+YT_VALID_VIDEO_DOMAINS = ["youtube.com", "youtu.be"]
