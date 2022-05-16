@@ -82,7 +82,8 @@ class MPDClient:
         pos = int(status["pos"])
         include_keys = ["duration", "file"]
         return [format_dict({k: v for k, v in song.items() if k in include_keys})
-                for song in MPDClient.client.playlistinfo((pos, ))
+                for song in MPDClient.client.playlistinfo((pos, )) +
+                MPDClient.client.playlistinfo((0, NEXT_LIST_LENGTH))
                 ][:NEXT_LIST_LENGTH]
 
 

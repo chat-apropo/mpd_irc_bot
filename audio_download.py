@@ -4,20 +4,19 @@ import os
 import shlex
 import subprocess
 import tempfile
-import json
 from pathlib import Path
 from urllib.parse import urlparse
 
 import yt_dlp as youtube_dl
 from slugify import slugify
 
-from utils import config
+from parseconf import config
 
 config = config["download"]
-AUDIO_EXTENSIONS = json.loads(config["AUDIO_EXTENSIONS"])
-MAX_AUDIO_LENGTH = int(config["MAX_AUDIO_LENGTH"])
-MAX_FILE_SIZE = int(config["MAX_FILE_SIZE"])
-YT_VALID_VIDEO_DOMAINS = json.loads(config["YT_VALID_VIDEO_DOMAINS"])
+AUDIO_EXTENSIONS = config["AUDIO_EXTENSIONS"]
+MAX_AUDIO_LENGTH = config["MAX_AUDIO_LENGTH"]
+MAX_FILE_SIZE = config["MAX_FILE_SIZE"]
+YT_VALID_VIDEO_DOMAINS = config["YT_VALID_VIDEO_DOMAINS"]
 
 logger = logging.getLogger()
 

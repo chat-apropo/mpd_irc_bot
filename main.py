@@ -18,7 +18,6 @@ create passwords for authorized users to use the openmic
 # https://www.youtube.com/watch?v=3rW7Vpep3II 
 
 import datetime
-import json
 import logging
 import os
 import re
@@ -42,27 +41,27 @@ from audio_download import (MAX_AUDIO_LENGTH, MAX_FILE_SIZE,
                             download_audio)
 from message_server import listen_loop
 from mpd_client import MPDClient, mpd_loop_with_handler
-from utils import config
+from parseconf import config
 
 LOGFILE = config["log"]["LOGFILE"]
 if LOGFILE == "None":
     LOGFILE = None
-LOG_LEVEL = int(config["log"]["LOG_LEVEL"])
-ADMINS = json.loads(config["bot"]["ADMINS"])
+LOG_LEVEL = config["log"]["LOG_LEVEL"]
+ADMINS = config["bot"]["ADMINS"]
 HOST = config["irc"]["HOST"]
-PORT = int(config["irc"]["PORT"])
+PORT = config["irc"]["PORT"]
 NICK = config["irc"]["NICK"]
 PASSWORD = config["irc"]["PASSWORD"]
-CHANNELS = json.loads(config["irc"]["CHANNELS"])
+CHANNELS = config["irc"]["CHANNELS"]
 DCC_HOST = config["irc"]["DCC_HOST"]
-DCC_PORTS = [int(port) for port in json.loads(config["irc"]["DCC_PORTS"])]
+DCC_PORTS = config["irc"]["DCC_PORTS"]
 MUSIC_DIR = config["mpd"]["MUSIC_DIR"]
 ICECAST_CONFIG = config["bot"]["ICECAST_CONFIG"]
 MESSAGE_RELAY_FIFO_PATH = config["bot"]["MESSAGE_RELAY_FIFO_PATH"]
 MPD_HOST = config["mpd"]["MPD_HOST"]
-MPD_PORT = int(config["mpd"]["MPD_PORT"])
+MPD_PORT = config["mpd"]["MPD_PORT"]
 MPD_FOLDER = config["mpd"]["MPD_FOLDER"]
-MAX_USER_QUEUE_LENGTH = int(config["mpd"]["MAX_USER_QUEUE_LENGTH"])
+MAX_USER_QUEUE_LENGTH = config["mpd"]["MAX_USER_QUEUE_LENGTH"]
 PREFIX = config["bot"]["PREFIX"]
 
 
@@ -262,6 +261,7 @@ async def move(bot: IrcBot, args: re.Match, msg: Message):
     except Exception:
         await reply(bot, msg, "Failed to move!")
 
+# TODO no ports available error
 @utils.custom_handler("dccsend")
 async def on_dcc_send(bot: IrcBot, **m):
     nick = m["nick"]
