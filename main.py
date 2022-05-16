@@ -23,9 +23,11 @@ import os
 import re
 import threading
 from pathlib import Path
+from functools import wraps
 
 import trio
 import validators
+from typing import Union, List
 from cachetools import TTLCache
 from IrcBot.bot import Color, IrcBot, Message, utils
 from IrcBot.dcc import DccServer
@@ -40,6 +42,7 @@ from mpd_client import MPDClient, mpd_loop_with_handler
 
 LOGFILE = None
 LOG_LEVEL = logging.DEBUG
+ADMINS = ["mattf", "gasconheart"]
 HOST = 'irc.dot.org.es'
 PORT = 6697
 NICK = '_mpdbot'
@@ -65,6 +68,33 @@ mpd_client = MPDClient(MPD_HOST, MPD_PORT)
 nick_cache = {}
 
 
+def auth_command(*m_args, **m_kwargs):
+    def wrap_cmd(func):
+        @utils.arg_command(*m_args, **m_kwargs)
+        async def wrapped(bot: IrcBot, args: re.Match, msg: Message):
+            if not await is_identified(bot, msg.nick):
+                await reply(bot, msg, "You cannot use this bot before you register your nick")
+                return
+            return await func(bot, args, msg)
+        return wrapped
+    return wrap_cmd
+
+def admin_command(*m_args, **m_kwargs):
+    def wrap_cmd(func):
+        @utils.arg_command(*m_args, **m_kwargs)
+        async def wrapped(bot: IrcBot, args: re.Match, msg: Message):
+            if not await is_identified(bot, msg.nick):
+                await reply(bot, msg, "You cannot use this bot before you register your nick")
+                return
+            if msg.nick not in ADMINS:
+                await reply(bot, msg, "Only admins can use this command")
+                return
+            return await func(bot, args, msg)
+        return wrapped
+    return wrap_cmd
+
+def non_numeric_arg(args: re.Match, i: int):
+    return not args or not args.group(i) or not args.group(i).isdigit()
 
 @utils.custom_handler("dccsend")
 async def on_dcc_send(bot: IrcBot, **m):
@@ -140,10 +170,13 @@ async def is_identified(bot: IrcBot, nick: str) -> bool:
 def _reply_str(bot: IrcBot, in_msg: Message, text: str):
     return f"({in_msg.nick}): {text}"
 
-async def reply(bot: IrcBot, in_msg: Message, text: str):
+async def reply(bot: IrcBot, in_msg: Message, message: Union[str, List[str]]):
     """Reply to a message."""
-    msg = _reply_str(bot, in_msg, text)
-    await bot.send_message(Message(channel=in_msg.channel, message=msg))
+    if isinstance(message, str):
+        message = [message]
+    for text in message:
+        msg = _reply_str(bot, in_msg, text)
+        await bot.send_message(msg, channel=in_msg.channel)
 
 def sync_write_fifo(text):
     with open(MESSAGE_RELAY_FIFO_PATH, "w") as f:
@@ -152,6 +185,7 @@ def sync_write_fifo(text):
 def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
     """Download a file in a thread."""
 
+    # TODO make this a limited request thread pool
     def download_in_thread_target(song_url: str):
         err = None
         try:
@@ -186,17 +220,22 @@ def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
     ).start()
 
 
-@utils.arg_command("song", "Info about the current song and player status")
-async def song(bot: IrcBot, args: re.Match, msg: Message):
+@auth_command("status", "Info about the current song and player status")
+async def status(bot: IrcBot, args: re.Match, msg: Message):
     song = mpd_client.current_song()
     await reply(bot, msg, song)
 
-@utils.arg_command("add", "Add a song to the playlist", f"{PREFIX}add <youtube_link|audio_url>. You can also submit audios with dcc. You cannot enqueue more than {MAX_USER_QUEUE_LENGTH} audios.")
-async def add(bot: IrcBot, args: re.Match, msg: Message):
-    if not await is_identified(bot, msg.nick):
-        await reply(bot, msg, "You cannot use this bot before you register your nick")
-        return
+@auth_command("list", "Shows next songs in queue")
+async def list(bot: IrcBot, args: re.Match, msg: Message):
+    await reply(bot, msg, mpd_client.next_songs())
 
+@auth_command("fulllist", "Shows all the songs in the playlist", "You will receive a DM from the bot")
+async def fullist(bot: IrcBot, args: re.Match, msg: Message):
+    msg.channel = msg.nick
+    await reply(bot, msg, mpd_client.playlist())
+
+@auth_command("add", "Add a song to the playlist", f"{PREFIX}add <youtube_link|audio_url>. You can also submit audios with dcc. You cannot enqueue more than {MAX_USER_QUEUE_LENGTH} audios.")
+async def add(bot: IrcBot, args: re.Match, msg: Message):
     args = utils.m2list(args)
     if len(args) == 0:
         await reply(bot, msg, "You need to specify a song to add")
@@ -218,6 +257,55 @@ async def add(bot: IrcBot, args: re.Match, msg: Message):
 @utils.arg_command("source", "Shows bot source code url")
 async def source(bot: IrcBot, args: re.Match, msg: Message):
     await reply(bot, msg, "https://github.com/matheusfillipe/mpd_irc_bot")
+
+@admin_command("keep", "(ADMIN) keeps the music another use added", f"(ADMIN) {PREFIX}keep <nick> [number] -- if number is omitted will keep all songs added by a user")
+async def keep(bot: IrcBot, args: re.Match, msg: Message):
+    pass
+
+@admin_command("next", "(ADMIN) Skips to next song in the playlist")
+async def next(bot: IrcBot, args: re.Match, msg: Message):
+    try:
+        mpd_client.next()
+    except Exception:
+        await reply(bot, msg, "Could not go to next song")
+
+@admin_command("prev", "(ADMIN) Goes back to previous song in the playlist")
+async def previous(bot: IrcBot, args: re.Match, msg: Message):
+    try:
+        mpd_client.previous()
+    except Exception:
+        await reply(bot, msg, "Could not go back to previous song")
+
+@admin_command("play", "(ADMIN) Play song in certain position", f"(ADMIN) {PREFIX}play <position>")
+async def play(bot: IrcBot, args: re.Match, msg: Message):
+    if non_numeric_arg(args, 1):
+        await reply(bot, msg, "You need to specify a position")
+        return
+    try:
+        mpd_client.play(args[1])
+    except Exception:
+        await reply(bot, msg, "Could not play song")
+
+@admin_command("delete", "(ADMIN) Deletes a song in certain position", f"(ADMIN) {PREFIX}delete <position>")
+async def delete(bot: IrcBot, args: re.Match, msg: Message):
+    if non_numeric_arg(args, 1):
+        await reply(bot, msg, "You need to specify a position")
+        return
+    try:
+        mpd_client.delete(args[1])
+    except Exception:
+        await reply(bot, msg, "Failed to delete song")
+
+@admin_command("move", "(ADMIN) Moves a song to a certain position", f"(ADMIN) {PREFIX}move <from> <to>")
+async def move(bot: IrcBot, args: re.Match, msg: Message):
+    if non_numeric_arg(args, 1) or non_numeric_arg(args, 2):
+        await reply(bot, msg, "You need to specify a from position and a to position")
+        return
+    try:
+        mpd_client.move(args[1], args[2])
+    except Exception:
+        await reply(bot, msg, "Failed to move!")
+
 
 async def onconnect(bot: IrcBot):
     async def message_handler(text):
