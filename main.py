@@ -38,7 +38,7 @@ from slugify import slugify
 from audio_download import (MAX_AUDIO_LENGTH, MAX_FILE_SIZE,
                             ExtensionNotAllowed, FailedToDownload,
                             FailedToProcess, MaxAudioLength, MaxFilesize,
-                            download_audio)
+                            allowed_file, download_audio, get_audio_length)
 from message_server import listen_loop
 from mpd_client import MPDClient, mpd_loop_with_handler
 from parseconf import config
@@ -54,8 +54,8 @@ NICK = config["irc"]["NICK"]
 PASSWORD = config["irc"]["PASSWORD"]
 CHANNELS = config["irc"]["CHANNELS"]
 DCC_HOST = config["irc"]["DCC_HOST"]
+DCC_ANNOUNCE_HOST = config["irc"]["DCC_ANNOUNCE_HOST"]
 DCC_PORTS = config["irc"]["DCC_PORTS"]
-MUSIC_DIR = config["mpd"]["MUSIC_DIR"]
 ICECAST_CONFIG = config["bot"]["ICECAST_CONFIG"]
 MESSAGE_RELAY_FIFO_PATH = config["bot"]["MESSAGE_RELAY_FIFO_PATH"]
 MPD_HOST = config["mpd"]["MPD_HOST"]
@@ -261,7 +261,6 @@ async def move(bot: IrcBot, args: re.Match, msg: Message):
     except Exception:
         await reply(bot, msg, "Failed to move!")
 
-# TODO no ports available error
 @utils.custom_handler("dccsend")
 async def on_dcc_send(bot: IrcBot, **m):
     nick = m["nick"]
@@ -287,29 +286,48 @@ async def on_dcc_send(bot: IrcBot, **m):
         await bot.send_message(
             f"File too big! Max file size is {MAX_FILE_SIZE} bytes", m["nick"]
         )
+        await bot.dcc_reject(DccServer.SEND, nick, m["filename"])
         return
 
-    path = Path(MPD_FOLDER).expanduser() / Path(slugify(m["filename"])) / Path(NICK) / Path(m["filename"])
-    await bot.dcc_get(
-        str(path),
-        m,
-        progress_callback=lambda _, p: progress_handler(
-            p, f"UPLOAD {Path(m['filename']).name} %s%%"
-        ),
-    )
+    if not allowed_file(m["filename"]):
+        await bot.send_message(
+            "File extension not allowed!",
+            m["nick"],
+        )
+        await bot.dcc_reject(DccServer.SEND, nick, m["filename"])
+        return
+
+    file = Path(m['filename'])
+    to_dir = Path(MPD_FOLDER).expanduser() / Path(NICK)
+    if not to_dir.exists():
+        to_dir.mkdir(parents=True)
+    path = to_dir / Path(slugify(file.stem) + file.suffix)
+    if not await bot.dcc_get(
+            str(path),
+            m,
+            progress_callback=lambda _, p: progress_handler(
+                p, f"UPLOAD {Path(m['filename']).name} %s%%"
+            ),):
+        await bot.send_message(
+            "Failed to download file", m["nick"]
+        )
+        return
+
     await bot.send_message(
         Message(
             m["nick"], message=f"{m['filename']} has been received!", is_private=True
         )
     )
-    mpd_client.add_next(str(path))
-    await bot.send_message(
-        Message(
-            m["nick"],
-            message=f"{m['filename']} has been added to the playlist!",
-            is_private=True,
-        )
-    )
+
+    def on_add():
+        uri = os.path.join(NICK, path.name)
+        if get_audio_length(str(path)) > MAX_AUDIO_LENGTH:
+            os.remove(str(path))
+            sync_write_fifo(f"[[{m['nick']}]] Your audio is too lenghty. Max allowed is: {MAX_AUDIO_LENGTH} seconds.")
+            return
+        mpd_client.add_next(uri)
+        sync_write_fifo(f"[[{m['nick']}]] {m['filename']} has been added to the playlist!")
+    threading.Thread(target=on_add, daemon=True).start()
 
 
 @utils.custom_handler("dccreject")
@@ -341,5 +359,5 @@ utils.setHelpBottom("You can learn more about sonic pi at: https://sonic-pi.net/
 
 if __name__ == "__main__":
     utils.setLogging(LOG_LEVEL, LOGFILE)
-    bot = IrcBot(HOST, PORT, NICK, CHANNELS, PASSWORD, use_ssl=PORT == 6697, dcc_host=DCC_HOST, dcc_ports=DCC_PORTS)
+    bot = IrcBot(HOST, PORT, NICK, CHANNELS, PASSWORD, use_ssl=PORT == 6697, dcc_host=DCC_HOST, dcc_ports=DCC_PORTS, dcc_announce_host=DCC_ANNOUNCE_HOST)
     bot.runWithCallback(onconnect)

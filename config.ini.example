@@ -4,8 +4,9 @@ PORT = 6697
 NICK = '_mpdbot'
 PASSWORD = ''
 CHANNELS = ["#bots"]
-# Use your WAN IP
 DCC_HOST = "0.0.0.0"
+# Use your WAN IP, this is the ip that is sent to dcc clients
+DCC_ANNOUNCE_HOST = "0.0.0.0"
 DCC_PORTS = [4990, 4991, 4992, 4993, 4994, 4995, 4996, 4997, 4998, 4999]
 
 [log]
@@ -23,7 +24,6 @@ PREFIX = "!"
 MPD_HOST = "localhost"
 MPD_PORT = 6600
 MPD_FOLDER = "~/music/"
-MUSIC_DIR = "~/music/mpdbot"
 MAX_USER_QUEUE_LENGTH = 3
 
 [download]
