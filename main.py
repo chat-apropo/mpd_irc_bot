@@ -31,7 +31,6 @@ import datetime
 import logging
 import os
 import re
-import threading
 from pathlib import Path
 from typing import List, Union
 
@@ -79,7 +78,7 @@ utils.setPrefix(PREFIX)
 logger = utils.logger
 mpd_client = MPDClient(MPD_HOST, MPD_PORT)
 nick_cache = {}
-song_queue = SongQueue(MAX_USER_QUEUE_LENGTH)
+song_queue = SongQueue(MAX_USER_QUEUE_LENGTH, mpd_client)
 thread_pool = ThreadPool(4)
 
 
@@ -88,7 +87,7 @@ def auth_command(*m_args, **m_kwargs):
         @utils.arg_command(*m_args, **m_kwargs)
         async def wrapped(bot: IrcBot, args: re.Match, msg: Message):
             if not await is_identified(bot, msg.nick):
-                await reply(bot, msg, "You cannot use this bot before you register your nick")
+                await reply(bot, msg, error("You cannot use this bot before you register your nick"))
                 return
             return await func(bot, args, msg)
         return wrapped
@@ -100,10 +99,10 @@ def admin_command(*m_args, **m_kwargs):
         @utils.arg_command(*m_args, **m_kwargs)
         async def wrapped(bot: IrcBot, args: re.Match, msg: Message):
             if not await is_identified(bot, msg.nick):
-                await reply(bot, msg, "You cannot use this bot before you register your nick")
+                await reply(bot, msg, error("You cannot use this bot before you register your nick"))
                 return
             if msg.nick not in ADMINS:
-                await reply(bot, msg, "Only admins can use this command")
+                await reply(bot, msg, error("Only admins can use this command"))
                 return
             return await func(bot, args, msg)
         return wrapped
@@ -136,7 +135,11 @@ async def is_identified(bot: IrcBot, nick: str) -> bool:
 
 
 def _reply_str(bot: IrcBot, in_msg: Message, text: str):
-    return f"({in_msg.nick}): {text}"
+    return f"{Color('(' + in_msg.nick + '):', fg=Color.green).str} {text}"
+
+
+def error(text: str):
+    return Color(text, fg=Color.red).str
 
 
 async def reply(bot: IrcBot, in_msg: Message, message: Union[str, List[str]]):
@@ -156,23 +159,23 @@ def sync_write_fifo(text):
 def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
     """Download a file in a thread."""
 
-    # TODO make this a limited request thread pool
     def download_in_thread_target(song_url: str):
         err = None
         try:
             song = download_audio(song_url, os.path.join(MPD_FOLDER, NICK))
         except MaxFilesize as e:
-            err = f"That file is too big. {e}"
+            err = error(f"That file is too big. {e}")
         except MaxAudioLength as e:
-            err = f"That audio is too long. {e}"
+            err = error(f"That audio is too long. {e}")
         except FailedToProcess:
-            err = "That audio could not be processed"
+            err = error("That audio could not be processed")
         except FailedToDownload:
-            err = "That audio could not be downloaded"
+            err = error("That audio could not be downloaded")
         except ExtensionNotAllowed as e:
-            err = f"That audio extension is not allowed. {e}"
+            err = error(f"That audio extension is not allowed. {e}")
         except Exception as e:
-            err = f"Error: {e}"
+            err = error(f"Sorry but an error occurred.")
+            logger.error(e)
         if err:
             err = _reply_str(bot, in_msg, err)
             sync_write_fifo(f"[[{in_msg.channel}]] {err}")
@@ -180,16 +183,21 @@ def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
 
         uri = os.path.join(NICK, Path(song).name)
         logger.debug(f"Adding '{uri=}' to the playlist")
-        mpd_client.add_next(uri)
         onend_text = _reply_str(
             bot, in_msg, f"{Path(song).stem} has been added to the playlist")
+        if in_msg.nick in ADMINS:
+            song_queue.last_pos = song_queue.next_pos()
+            mpd_client.add_at_pos(uri, song_queue.last_pos)
+        else:
+            try:
+                song_queue.add_song(in_msg.nick, uri)
+            except SongQueue.FullUserError:
+                onend_text = _reply_str(
+                    bot, in_msg, error("Sorry but your queue is full. Wait until one of your songs finishes and try adding again."))
+
         sync_write_fifo(f"[[{in_msg.channel}]] {onend_text}")
 
-    threading.Thread(
-        target=download_in_thread_target,
-        args=(url,),
-        daemon=True,
-    ).start()
+    thread_pool.add_task(download_in_thread_target, url)
 
 
 @auth_command("status", "Info about the current song and player status")
@@ -213,20 +221,31 @@ async def fullist(bot: IrcBot, args: re.Match, msg: Message):
 async def add(bot: IrcBot, args: re.Match, msg: Message):
     args = utils.m2list(args)
     if len(args) == 0:
-        await reply(bot, msg, "You need to specify a song to add")
+        await reply(bot, msg, error("You need to specify a song to add"))
         return
 
     if len(args) > 1:
-        await reply(bot, msg, "You can only add one song at a time")
+        await reply(bot, msg, error("You can only add one song at a time"))
         return
 
     song_url = args[0]
     if not song_url.startswith("http"):
-        await reply(bot, msg, "That is not a valid url: " + song_url)
+        await reply(bot, msg, error("That is not a valid url: ") + song_url)
         return
 
-    await reply(bot, msg, "Downloading...")
-    download_in_thread(bot, msg, song_url)
+    nick = msg.nick
+    if not song_queue.can_add(nick):
+        await bot.send_message(
+            f"You cannot add more than {MAX_USER_QUEUE_LENGTH} audios. Wait for one of your songs to finish and try again.",
+            nick,
+        )
+        return
+
+    try:
+        download_in_thread(bot, msg, song_url)
+        await reply(bot, msg, "Downloading...")
+    except ThreadPool.FullError:
+        await reply(bot, msg, error("The bot is currently busy downloading other songs. Try again soon."))
 
 
 @utils.arg_command("source", "Shows bot source code url")
@@ -234,9 +253,34 @@ async def source(bot: IrcBot, args: re.Match, msg: Message):
     await reply(bot, msg, "https://github.com/matheusfillipe/mpd_irc_bot")
 
 
-@admin_command("keep", "(ADMIN) keeps the music another use added", f"(ADMIN) {PREFIX}keep <nick> [number] -- if number is omitted will keep all songs added by a user")
+@admin_command("keep", "(ADMIN) keeps the music another use added", f"(ADMIN) {PREFIX}keep <nick|pos> You can either specify a position of an individual song or a nick to keep all from")
 async def keep(bot: IrcBot, args: re.Match, msg: Message):
-    pass
+    args = utils.m2list(args)
+    if len(args) == 0:
+        await reply(bot, msg, error("You need to specify a user"))
+        return
+
+    nick_or_pos = args[0]
+    if nick_or_pos.isdigit():
+        pos = int(nick_or_pos)
+        if pos < 0 or pos >= len(song_queue.queue):
+            await reply(bot, msg, error("That is not a valid position"))
+            return
+        try:
+            song_queue.keep_song(pos)
+        except SongQueue.PositionNotFoundError:
+            await reply(bot, msg, error("That is not a valid position that was added by a user so it wont be deleted."))
+            return
+        return
+
+    else:
+        try:
+            song_queue.keep_all(nick_or_pos)
+        except KeyError:
+            await reply(bot, msg, error("That user Did not add any songs"))
+            return
+
+    await reply(bot, msg, "song(s) have been kept")
 
 
 @admin_command("next", "(ADMIN) Skips to next song in the playlist")
@@ -244,7 +288,7 @@ async def next(bot: IrcBot, args: re.Match, msg: Message):
     try:
         mpd_client.next()
     except Exception:
-        await reply(bot, msg, "Could not go to next song")
+        await reply(bot, msg, error("Could not go to next song"))
 
 
 @admin_command("prev", "(ADMIN) Goes back to previous song in the playlist")
@@ -252,18 +296,18 @@ async def previous(bot: IrcBot, args: re.Match, msg: Message):
     try:
         mpd_client.previous()
     except Exception:
-        await reply(bot, msg, "Could not go back to previous song")
+        await reply(bot, msg, error("Could not go back to previous song"))
 
 
 @admin_command("play", "(ADMIN) Play song in certain position", f"(ADMIN) {PREFIX}play <position>")
 async def play(bot: IrcBot, args: re.Match, msg: Message):
     if non_numeric_arg(args, 1):
-        await reply(bot, msg, "You need to specify a position")
+        await reply(bot, msg, error("You need to specify a position"))
         return
     try:
         mpd_client.play(args[1])
     except Exception:
-        await reply(bot, msg, "Could not play song")
+        await reply(bot, msg, error("Could not play song"))
 
 
 @admin_command("delete", "(ADMIN) Deletes a song in certain position", f"(ADMIN) {PREFIX}delete <position>")
@@ -275,7 +319,7 @@ async def delete(bot: IrcBot, args: re.Match, msg: Message):
         mpd_client.delete(args[1])
         await reply(bot, msg, "Song deleted successfully")
     except Exception:
-        await reply(bot, msg, "Failed to delete song")
+        await reply(bot, msg, error("Failed to delete song"))
 
 
 @admin_command("move", "(ADMIN) Moves a song to a certain position", f"(ADMIN) {PREFIX}move <from> <to>")
@@ -287,7 +331,7 @@ async def move(bot: IrcBot, args: re.Match, msg: Message):
         mpd_client.move(args[1], args[2])
         await reply(bot, msg, "Moved song successfully")
     except Exception:
-        await reply(bot, msg, "Failed to move!")
+        await reply(bot, msg, error("Failed to move!"))
 
 
 @utils.custom_handler("dccsend")
@@ -296,7 +340,16 @@ async def on_dcc_send(bot: IrcBot, **m):
     if not await is_identified(bot, nick):
         await bot.dcc_reject(DccServer.SEND, nick, m["filename"])
         await bot.send_message(
-            "You cannot use this bot before you register your nick", nick
+            error("You cannot use this bot before you register your nick"),
+            nick
+        )
+        return
+
+    if not song_queue.can_add(nick):
+        await bot.dcc_reject(DccServer.SEND, nick, m["filename"])
+        await bot.send_message(
+            f"You cannot add more than {MAX_USER_QUEUE_LENGTH} audios. Wait for one of your songs to finish and try again.",
+            nick,
         )
         return
 
@@ -313,14 +366,15 @@ async def on_dcc_send(bot: IrcBot, **m):
 
     if int(m["size"]) > MAX_FILE_SIZE:
         await bot.send_message(
-            f"File too big! Max file size is {MAX_FILE_SIZE} bytes", m["nick"]
+            error(
+                f"File too big! Max file size is {MAX_FILE_SIZE} bytes"), m["nick"]
         )
         await bot.dcc_reject(DccServer.SEND, nick, m["filename"])
         return
 
     if not allowed_file(m["filename"]):
         await bot.send_message(
-            "File extension not allowed!",
+            error("File extension not allowed!"),
             m["nick"],
         )
         await bot.dcc_reject(DccServer.SEND, nick, m["filename"])
@@ -338,7 +392,7 @@ async def on_dcc_send(bot: IrcBot, **m):
                 p, f"UPLOAD {Path(m['filename']).name} %s%%"
             ),):
         await bot.send_message(
-            "Failed to download file", m["nick"]
+            error("Failed to download file"), m["nick"]
         )
         return
 
@@ -355,10 +409,29 @@ async def on_dcc_send(bot: IrcBot, **m):
             sync_write_fifo(
                 f"[[{m['nick']}]] Your audio is too lenghty. Max allowed is: {MAX_AUDIO_LENGTH} seconds.")
             return
+
         mpd_client.add_next(uri)
+        onend_msg = f"{m['filename']} has been added to the playlist!"
+        if m['nick'] in ADMINS:
+            song_queue.last_pos = song_queue.next_pos()
+            mpd_client.add_at_pos(uri, song_queue.last_pos)
+        else:
+            try:
+                song_queue.add_song(m['nick'], uri)
+            except SongQueue.FullUserError:
+                onend_msg = error(
+                    "Sorry but your queue is full. Wait until one of your songs finishes and try adding again.")
         sync_write_fifo(
-            f"[[{m['nick']}]] {m['filename']} has been added to the playlist!")
-    threading.Thread(target=on_add, daemon=True).start()
+            f"[[{m['nick']}]] {onend_msg}")
+
+    try:
+        thread_pool.add_task(on_add)
+    except ThreadPool.FullError:
+        await bot.send_message(
+            error("The bot is currently busy downloading other songs. Try again soon."),
+            nick,
+        )
+        return
 
 
 @utils.custom_handler("dccreject")
@@ -381,16 +454,17 @@ async def onconnect(bot: IrcBot):
             await bot.send_message(text, channel)
 
     async def mpd_player_handler():
-        await message_handler(f"[{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC] - Playing: {mpd_client.current_song_name()}")
+        timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        await message_handler(f"[{Color(timestamp, fg=Color.random()).str} UTC] - Playing: {mpd_client.current_song_name()}")
 
     async with trio.open_nursery() as nursery:
         nursery.start_soon(
             listen_loop, MESSAGE_RELAY_FIFO_PATH, message_handler)
         nursery.start_soon(mpd_loop_with_handler, mpd_player_handler)
 
-utils.setHelpHeader("RADIO BOT COMMANDS")
+utils.setHelpHeader(Color("RADIO BOT COMMANDS", fg=Color.cyan).str)
 utils.setHelpBottom(
-    "You can learn more about sonic pi at: https://sonic-pi.net/tutorial.html")
+    Color("You can learn more about sonic pi at: https://sonic-pi.net/tutorial.html", bg=Color.black).str)
 
 if __name__ == "__main__":
     utils.setLogging(LOG_LEVEL, LOGFILE)

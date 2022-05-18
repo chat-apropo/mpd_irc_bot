@@ -112,6 +112,13 @@ class SongQueue:
         self.last_pos = pos
         return song
 
+    def can_add(self, user: str) -> bool:
+        """Return whether a user can add a song to the queue."""
+        try:
+            return len(self.queues[user]) < self.max_len
+        except KeyError:
+            return True
+
     def user_songs(self, user: str) -> [Song]:
         """Return the songs of a user."""
         return self.queues[user]
@@ -123,11 +130,22 @@ class SongQueue:
             songs.extend(self.queues[user])
         return songs
 
+    def keep_all(self, user: str):
+        """Keep all songs of a user, removing them from the queue if in any,
+        making sure they won't be automatically removed.
+
+        Can raise KeyError.
+        """
+        for song in deepcopy(self.queues[user]):
+            self.queues[user].remove(song)
+            logger.info(
+                f"Keeping song {song.id=} from queue of {song.from_nick=}")
+
     def keep_song(self, pos: int):
         """Stops tracking a song, removing it from the queue if in any, making
         sure it wont get automatically removed.
 
-        Can raise PositionNotFoundError.
+        Can raise PositionNotFoundError and KeyError.
         """
         try:
             song_id = self.mpd_client.get_id_at_pos(pos)
