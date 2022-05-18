@@ -1,3 +1,16 @@
+################################################################################
+#      ____  ___    ____  ________     ____  ____  ______
+#     / __ \/   |  / __ \/  _/ __ \   / __ )/ __ \/_  __/
+#    / /_/ / /| | / / / // // / / /  / __  / / / / / /
+#   / _, _/ ___ |/ /_/ // // /_/ /  / /_/ / /_/ / / /
+#  /_/ |_/_/  |_/_____/___/\____/  /_____/\____/ /_/
+#
+#
+# Matheus Fillipe 18/05/2022
+# MIT License
+################################################################################
+
+
 """im going to make a bot that will let you input a youtube link, audio url, or
 send an audio with dcc and it will add it as the next on the queue, each use
 can like have 3 audios at once on the queue unless admins.
@@ -6,32 +19,26 @@ It will also let you play live with a sonic pi ruby repl. Also will
 create passwords for authorized users to use the openmic
 """
 
-# TODO download videos from youtube
 # TODO edit icecast password for a source randomly
 # TODO add to playlist, limit users queue length
-# TODO accept mp3 files from dcc
-# TODO accept youtube or audio links
 # TODO irc bot commands
 
 # https://github.com/matheusfillipe/ircbot/blob/main/examples/dccbot.py
 # https://python-mpd2.readthedocs.io/en/latest/topics/getting-started.html
-# https://www.youtube.com/watch?v=3rW7Vpep3II 
+# https://www.youtube.com/watch?v=3rW7Vpep3II
 
 import datetime
 import logging
 import os
 import re
 import threading
-from functools import wraps
 from pathlib import Path
 from typing import List, Union
 
 import trio
-import validators
 from cachetools import TTLCache
 from IrcBot.bot import Color, IrcBot, Message, utils
 from IrcBot.dcc import DccServer
-from IrcBot.utils import debug, log
 from slugify import slugify
 
 # import all excetions
@@ -42,6 +49,7 @@ from audio_download import (MAX_AUDIO_LENGTH, MAX_FILE_SIZE,
 from message_server import listen_loop
 from mpd_client import MPDClient, mpd_loop_with_handler
 from parseconf import config
+from playlistmng import SongQueue, ThreadPool
 
 LOGFILE = config["log"]["LOGFILE"]
 if LOGFILE == "None":
@@ -62,16 +70,17 @@ MPD_HOST = config["mpd"]["MPD_HOST"]
 MPD_PORT = config["mpd"]["MPD_PORT"]
 MPD_FOLDER = config["mpd"]["MPD_FOLDER"]
 MAX_USER_QUEUE_LENGTH = config["mpd"]["MAX_USER_QUEUE_LENGTH"]
+MAX_DOWNLOAD_THREADS = config["download"]["MAX_DOWNLOAD_THREADS"]
 PREFIX = config["bot"]["PREFIX"]
 
 
 utils.setPrefix(PREFIX)
 
 logger = utils.logger
-
 mpd_client = MPDClient(MPD_HOST, MPD_PORT)
-
 nick_cache = {}
+song_queue = SongQueue(MAX_USER_QUEUE_LENGTH)
+thread_pool = ThreadPool(4)
 
 
 def auth_command(*m_args, **m_kwargs):
@@ -84,6 +93,7 @@ def auth_command(*m_args, **m_kwargs):
             return await func(bot, args, msg)
         return wrapped
     return wrap_cmd
+
 
 def admin_command(*m_args, **m_kwargs):
     def wrap_cmd(func):
@@ -99,8 +109,10 @@ def admin_command(*m_args, **m_kwargs):
         return wrapped
     return wrap_cmd
 
+
 def non_numeric_arg(args: re.Match, i: int):
     return not args or not args.group(i) or not args.group(i).isdigit()
+
 
 async def is_identified(bot: IrcBot, nick: str) -> bool:
     global nick_cache
@@ -122,8 +134,10 @@ async def is_identified(bot: IrcBot, nick: str) -> bool:
         nick_cache[nick]["status"] = msg
     return msg.get("text").strip() == f"{nick} 3 {nick}" if msg else False
 
+
 def _reply_str(bot: IrcBot, in_msg: Message, text: str):
     return f"({in_msg.nick}): {text}"
+
 
 async def reply(bot: IrcBot, in_msg: Message, message: Union[str, List[str]]):
     """Reply to a message."""
@@ -133,9 +147,11 @@ async def reply(bot: IrcBot, in_msg: Message, message: Union[str, List[str]]):
         msg = _reply_str(bot, in_msg, text)
         await bot.send_message(msg, channel=in_msg.channel)
 
+
 def sync_write_fifo(text):
     with open(MESSAGE_RELAY_FIFO_PATH, "w") as f:
         f.write(text)
+
 
 def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
     """Download a file in a thread."""
@@ -165,7 +181,8 @@ def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
         uri = os.path.join(NICK, Path(song).name)
         logger.debug(f"Adding '{uri=}' to the playlist")
         mpd_client.add_next(uri)
-        onend_text = _reply_str(bot, in_msg, f"{Path(song).stem} has been added to the playlist")
+        onend_text = _reply_str(
+            bot, in_msg, f"{Path(song).stem} has been added to the playlist")
         sync_write_fifo(f"[[{in_msg.channel}]] {onend_text}")
 
     threading.Thread(
@@ -180,14 +197,17 @@ async def status(bot: IrcBot, args: re.Match, msg: Message):
     song = mpd_client.current_song()
     await reply(bot, msg, song)
 
+
 @auth_command("list", "Shows next songs in queue")
 async def list(bot: IrcBot, args: re.Match, msg: Message):
     await reply(bot, msg, mpd_client.next_songs())
+
 
 @auth_command("fulllist", "Shows all the songs in the playlist", "You will receive a DM from the bot")
 async def fullist(bot: IrcBot, args: re.Match, msg: Message):
     msg.channel = msg.nick
     await reply(bot, msg, mpd_client.playlist())
+
 
 @auth_command("add", "Add a song to the playlist", f"{PREFIX}add <youtube_link|audio_url>. You can also submit audios with dcc. You cannot enqueue more than {MAX_USER_QUEUE_LENGTH} audios.")
 async def add(bot: IrcBot, args: re.Match, msg: Message):
@@ -213,9 +233,11 @@ async def add(bot: IrcBot, args: re.Match, msg: Message):
 async def source(bot: IrcBot, args: re.Match, msg: Message):
     await reply(bot, msg, "https://github.com/matheusfillipe/mpd_irc_bot")
 
+
 @admin_command("keep", "(ADMIN) keeps the music another use added", f"(ADMIN) {PREFIX}keep <nick> [number] -- if number is omitted will keep all songs added by a user")
 async def keep(bot: IrcBot, args: re.Match, msg: Message):
     pass
+
 
 @admin_command("next", "(ADMIN) Skips to next song in the playlist")
 async def next(bot: IrcBot, args: re.Match, msg: Message):
@@ -224,12 +246,14 @@ async def next(bot: IrcBot, args: re.Match, msg: Message):
     except Exception:
         await reply(bot, msg, "Could not go to next song")
 
+
 @admin_command("prev", "(ADMIN) Goes back to previous song in the playlist")
 async def previous(bot: IrcBot, args: re.Match, msg: Message):
     try:
         mpd_client.previous()
     except Exception:
         await reply(bot, msg, "Could not go back to previous song")
+
 
 @admin_command("play", "(ADMIN) Play song in certain position", f"(ADMIN) {PREFIX}play <position>")
 async def play(bot: IrcBot, args: re.Match, msg: Message):
@@ -241,6 +265,7 @@ async def play(bot: IrcBot, args: re.Match, msg: Message):
     except Exception:
         await reply(bot, msg, "Could not play song")
 
+
 @admin_command("delete", "(ADMIN) Deletes a song in certain position", f"(ADMIN) {PREFIX}delete <position>")
 async def delete(bot: IrcBot, args: re.Match, msg: Message):
     if non_numeric_arg(args, 1):
@@ -248,8 +273,10 @@ async def delete(bot: IrcBot, args: re.Match, msg: Message):
         return
     try:
         mpd_client.delete(args[1])
+        await reply(bot, msg, "Song deleted successfully")
     except Exception:
         await reply(bot, msg, "Failed to delete song")
+
 
 @admin_command("move", "(ADMIN) Moves a song to a certain position", f"(ADMIN) {PREFIX}move <from> <to>")
 async def move(bot: IrcBot, args: re.Match, msg: Message):
@@ -258,8 +285,10 @@ async def move(bot: IrcBot, args: re.Match, msg: Message):
         return
     try:
         mpd_client.move(args[1], args[2])
+        await reply(bot, msg, "Moved song successfully")
     except Exception:
         await reply(bot, msg, "Failed to move!")
+
 
 @utils.custom_handler("dccsend")
 async def on_dcc_send(bot: IrcBot, **m):
@@ -323,10 +352,12 @@ async def on_dcc_send(bot: IrcBot, **m):
         uri = os.path.join(NICK, path.name)
         if get_audio_length(str(path)) > MAX_AUDIO_LENGTH:
             os.remove(str(path))
-            sync_write_fifo(f"[[{m['nick']}]] Your audio is too lenghty. Max allowed is: {MAX_AUDIO_LENGTH} seconds.")
+            sync_write_fifo(
+                f"[[{m['nick']}]] Your audio is too lenghty. Max allowed is: {MAX_AUDIO_LENGTH} seconds.")
             return
         mpd_client.add_next(uri)
-        sync_write_fifo(f"[[{m['nick']}]] {m['filename']} has been added to the playlist!")
+        sync_write_fifo(
+            f"[[{m['nick']}]] {m['filename']} has been added to the playlist!")
     threading.Thread(target=on_add, daemon=True).start()
 
 
@@ -340,24 +371,29 @@ async def onconnect(bot: IrcBot):
         match = re.match(r"^\[\[([^\]]+)\]\] (.*)$", text)
         if match:
             channel, text = match.groups()
-            logging.debug(f" Message relay server handler regex: {channel=}, {text=}")
+            logging.debug(
+                f" Message relay server handler regex: {channel=}, {text=}")
             await bot.send_message(text, channel)
             return
         for channel in CHANNELS:
-            logging.debug(f" Message relay server handler simple: {channel=}, {text=}")
+            logging.debug(
+                f" Message relay server handler simple: {channel=}, {text=}")
             await bot.send_message(text, channel)
 
     async def mpd_player_handler():
-        await message_handler(f"Playing: {mpd_client.current_song_name()}")
+        await message_handler(f"[{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC] - Playing: {mpd_client.current_song_name()}")
 
     async with trio.open_nursery() as nursery:
-        nursery.start_soon(listen_loop, MESSAGE_RELAY_FIFO_PATH, message_handler)
+        nursery.start_soon(
+            listen_loop, MESSAGE_RELAY_FIFO_PATH, message_handler)
         nursery.start_soon(mpd_loop_with_handler, mpd_player_handler)
 
 utils.setHelpHeader("RADIO BOT COMMANDS")
-utils.setHelpBottom("You can learn more about sonic pi at: https://sonic-pi.net/tutorial.html")
+utils.setHelpBottom(
+    "You can learn more about sonic pi at: https://sonic-pi.net/tutorial.html")
 
 if __name__ == "__main__":
     utils.setLogging(LOG_LEVEL, LOGFILE)
-    bot = IrcBot(HOST, PORT, NICK, CHANNELS, PASSWORD, use_ssl=PORT == 6697, dcc_host=DCC_HOST, dcc_ports=DCC_PORTS, dcc_announce_host=DCC_ANNOUNCE_HOST)
+    bot = IrcBot(HOST, PORT, NICK, CHANNELS, PASSWORD, use_ssl=PORT == 6697,
+                 dcc_host=DCC_HOST, dcc_ports=DCC_PORTS, dcc_announce_host=DCC_ANNOUNCE_HOST)
     bot.runWithCallback(onconnect)

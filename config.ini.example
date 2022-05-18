@@ -28,6 +28,7 @@ MAX_USER_QUEUE_LENGTH = 3
 
 [download]
 AUDIO_EXTENSIONS = ["wav", "mp3", "ogg", "flac", "aiff", "wma", "m4a"]
+MAX_DOWNLOAD_THREADS = 4
 MAX_AUDIO_LENGTH = 1800
 MAX_FILE_SIZE = 41943040
 YT_VALID_VIDEO_DOMAINS = ["youtube.com", "youtu.be"]

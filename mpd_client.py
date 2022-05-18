@@ -1,3 +1,16 @@
+################################################################################
+#      ____  ___    ____  ________     ____  ____  ______
+#     / __ \/   |  / __ \/  _/ __ \   / __ )/ __ \/_  __/
+#    / /_/ / /| | / / / // // / / /  / __  / / / / / /
+#   / _, _/ ___ |/ /_/ // // /_/ /  / /_/ / /_/ / / /
+#  /_/ |_/_/  |_/_____/___/\____/  /_____/\____/ /_/
+#
+#
+# Matheus Fillipe 18/05/2022
+# MIT License
+################################################################################
+
+
 import asyncio
 import datetime
 import logging
@@ -11,6 +24,7 @@ NEXT_LIST_LENGTH = 5
 
 logger = logging.getLogger()
 
+
 def dropin(func):
     """Decorator that connects the client, executes the function and
     disconnects the client."""
@@ -21,8 +35,10 @@ def dropin(func):
         return result
     return wrapper
 
+
 def int_args(func):
     """Decorator that converts all arguments to int."""
+
     def wrapper(self, *args, **kwargs):
         return func(self, *[int(a) for a in args], **{k: int(v) for k, v in kwargs.items()})
     return wrapper
@@ -35,8 +51,10 @@ def format_data(data, k):
         return Path(data[k]).stem
     return data[k]
 
+
 def format_dict(d: dict):
     return ", ".join(f"{k}: {format_data(d, k)}" for k in d)
+
 
 class MPDClient:
     client: Client = None
@@ -65,11 +83,12 @@ class MPDClient:
     def current_song(self):
         data = {}
         filter_keys = ["state", "duration", "elapsed"]
-        data.update({k: v for k, v in MPDClient.client.status().items() if k in filter_keys})
+        data.update(
+            {k: v for k, v in MPDClient.client.status().items() if k in filter_keys})
         include_keys = ["duration", "file", "pos"]
-        data.update({k: v for k, v in MPDClient.client.currentsong().items() if k in include_keys})
+        data.update(
+            {k: v for k, v in MPDClient.client.currentsong().items() if k in include_keys})
         return ", ".join(f"{k}: {format_data(data, k)}" for k in data)
-
 
     @dropin
     def current_song_name(self):
@@ -80,12 +99,11 @@ class MPDClient:
         """Next songs in queue."""
         status = MPDClient.client.currentsong()
         pos = int(status["pos"])
-        include_keys = ["duration", "file"]
+        include_keys = ["duration", "file", "pos"]
         return [format_dict({k: v for k, v in song.items() if k in include_keys})
                 for song in MPDClient.client.playlistinfo((pos, )) +
                 MPDClient.client.playlistinfo((0, NEXT_LIST_LENGTH))
                 ][:NEXT_LIST_LENGTH]
-
 
     @dropin
     def playlist(self):
@@ -96,10 +114,20 @@ class MPDClient:
         duration = int(sum(float(song['duration']) for song in playlist))
         status = MPDClient.client.status()
         length = int(status["playlistlength"])
-        info.append(f"                      Total duration: {datetime.timedelta(seconds=duration)}")
+        info.append(
+            f"                      Total duration: {datetime.timedelta(seconds=duration)}")
         info.append(f"                      Total songs: {length}")
         return info
 
+    @dropin
+    def surrounding_ids(self):
+        status = MPDClient.client.status()
+        playlist = MPDClient.client.playlistinfo()
+        return (playlist[int(status['song']) - 1]['id'], status["songid"], status["nextsongid"])
+
+    @dropin
+    def remove_id(self, id):
+        MPDClient.client.deleteid(id)
 
     @dropin
     def add_next(self, song: str):
@@ -109,6 +137,25 @@ class MPDClient:
         status = MPDClient.client.status()
         length = int(status["playlistlength"])
         MPDClient.client.move(length - 1, pos + 1)
+
+    @dropin
+    def pos(self):
+        return int(MPDClient.client.status()["song"])
+
+    @dropin
+    def length(self):
+        return int(MPDClient.client.status()["playlistlength"])
+
+    @dropin
+    def get_id_at_pos(self, pos: int):
+        return MPDClient.client.playlistinfo((pos, ))[0]["id"]
+
+    @dropin
+    def add_at_pos(self, song: str, pos: int):
+        MPDClient.client.add(song)
+        status = MPDClient.client.status()
+        length = int(status["playlistlength"])
+        MPDClient.client.move(length - 1, pos)
 
     @dropin
     def next(self):
@@ -143,6 +190,7 @@ class MPDClient:
                     await stream.send_all(f"idle {event}\n".encode())
                 elif response.startswith("changed: "):
                     return response.split(" ")[1]
+
 
 async def mpd_loop_with_handler(handler: Callable, event: str = "player"):
     c = MPDClient('localhost', 6600)
