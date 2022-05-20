@@ -10,22 +10,7 @@
 # MIT License
 ################################################################################
 
-
-"""im going to make a bot that will let you input a youtube link, audio url, or
-send an audio with dcc and it will add it as the next on the queue, each use
-can like have 3 audios at once on the queue unless admins.
-
-It will also let you play live with a sonic pi ruby repl. Also will
-create passwords for authorized users to use the openmic
-"""
-
 # TODO edit icecast password for a source randomly
-# TODO add to playlist, limit users queue length
-# TODO irc bot commands
-
-# https://github.com/matheusfillipe/ircbot/blob/main/examples/dccbot.py
-# https://python-mpd2.readthedocs.io/en/latest/topics/getting-started.html
-# https://www.youtube.com/watch?v=3rW7Vpep3II
 
 import datetime
 import logging
@@ -34,6 +19,7 @@ import re
 from pathlib import Path
 from typing import List, Union
 
+import requests
 import trio
 from cachetools import TTLCache
 from IrcBot.bot import Color, IrcBot, Message, utils
@@ -49,6 +35,7 @@ from message_server import listen_loop
 from mpd_client import MPDClient, mpd_loop_with_handler
 from parseconf import config
 from playlistmng import SongQueue, ThreadPool
+from sonic_pi import Server as PiServer
 
 LOGFILE = config["log"]["LOGFILE"]
 if LOGFILE == "None":
@@ -70,6 +57,9 @@ MPD_PORT = config["mpd"]["MPD_PORT"]
 MPD_FOLDER = config["mpd"]["MPD_FOLDER"]
 MAX_USER_QUEUE_LENGTH = config["mpd"]["MAX_USER_QUEUE_LENGTH"]
 MAX_DOWNLOAD_THREADS = config["download"]["MAX_DOWNLOAD_THREADS"]
+SONIC_PI_HOST = config["sonic-pi"]["SONIC_PI_HOST"]
+SONIC_PI_PORT = config["sonic-pi"]["SONIC_PI_PORT"]
+SONIC_PI_LIVE_URL = config["sonic-pi"]["SONIC_PI_LIVE_URL"]
 PREFIX = config["bot"]["PREFIX"]
 
 
@@ -80,6 +70,22 @@ mpd_client = MPDClient(MPD_HOST, MPD_PORT)
 nick_cache = {}
 song_queue = SongQueue(MAX_USER_QUEUE_LENGTH, mpd_client)
 thread_pool = ThreadPool(4)
+server = PiServer(SONIC_PI_HOST, SONIC_PI_PORT, None, None, True)
+sonic_pi_users = {}
+
+
+def paste(text):
+    """Paste text to ix.io."""
+    url = "http://ix.io"
+    payload = {'f:1=<-': text}
+    response = requests.request("POST", url, data=payload)
+    return response.text
+
+
+def read_paste(url):
+    """Read text from ix.io."""
+    response = requests.request("GET", url)
+    return response.text
 
 
 def auth_command(*m_args, **m_kwargs):
@@ -174,7 +180,7 @@ def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
         except ExtensionNotAllowed as e:
             err = error(f"That audio extension is not allowed. {e}")
         except Exception as e:
-            err = error(f"Sorry but an error occurred.")
+            err = error("Sorry but an error occurred.")
             logger.error(e)
         if err:
             err = _reply_str(bot, in_msg, err)
@@ -247,6 +253,46 @@ async def add(bot: IrcBot, args: re.Match, msg: Message):
     except ThreadPool.FullError:
         await reply(bot, msg, error("The bot is currently busy downloading other songs. Try again soon."))
 
+
+@auth_command("grab", "Grab the mic! Get an icecast password to start streaming", f"{PREFIX}grab - A password will be generated and you will get all the info as a dm.")
+async def grab(bot: IrcBot, args: re.Match, msg: Message):
+    # TODO Do icecast stuff
+    pass
+
+
+@auth_command("pi", "Toggles sonic pi repl", f"{PREFIX}pi [command]- https://sonic-pi.net/tutorial.html")
+async def pi(bot: IrcBot, args: re.Match, msg: Message):
+    args = utils.m2list(args)
+    if args:
+        sonic_pi_users[msg.nick] = [" ".join(args)]
+
+    if msg.nick in sonic_pi_users:
+        await reply(bot, msg, "Your Sonic Pi repl is now off. Sending code to sonic pi...")
+        server.run_code("\n".join(sonic_pi_users[msg.nick]))
+        return
+    sonic_pi_users[msg.nick] = []
+    await reply(bot, msg, f"Your Sonic Pi repl is now live at: {SONIC_PI_LIVE_URL}. Type {PREFIX}pi to turn it off and evaluate your code.")
+
+@auth_command("pstop", "Stops sonice pi audio")
+async def stop(bot: IrcBot, args: re.Match, msg: Message):
+    server.stop_all_jobs()
+    await reply(bot, msg, "Stopping audio...")
+
+@auth_command("paste", "Pastes your sonic pi code")
+async def pipaste(bot: IrcBot, args: re.Match, msg: Message):
+    if msg.nick not in sonic_pi_users:
+        await reply(bot, msg, error("You need to turn on your sonic pi repl first. Use {}pi".format(PREFIX)))
+        return
+    await reply(bot, msg, paste(sonic_pi_users[msg.nick]))
+
+
+@auth_command("read", "Read code from ix.io paste (or any raw text url)")
+async def readurl(bot: IrcBot, args: re.Match, msg: Message):
+    try:
+        server.run_code(read_paste(args[1]))
+    except Exception as e:
+        await reply(bot, msg, error("Failed to read paste: ") + str(e))
+    await reply(bot, msg, "Code has been read and sent!")
 
 @utils.arg_command("source", "Shows bot source code url")
 async def source(bot: IrcBot, args: re.Match, msg: Message):
@@ -439,6 +485,12 @@ def on_dcc_reject(**m):
     logger.info(f"User Rejected {m=}")
 
 
+@utils.regex_cmd_with_messsage(r"^(.+)$")
+def all_msgs(args: re.Match, msg: Message):
+    if msg.nick not in sonic_pi_users or msg.message.strip().startswith(PREFIX):
+        return
+    sonic_pi_users[msg.nick].append(args[1])
+
 async def onconnect(bot: IrcBot):
     async def message_handler(text):
         match = re.match(r"^\[\[([^\]]+)\]\] (.*)$", text)
@@ -455,6 +507,7 @@ async def onconnect(bot: IrcBot):
 
     async def mpd_player_handler():
         timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        song_queue.update()
         await message_handler(f"[{Color(timestamp, fg=Color.random()).str} UTC] - Playing: {mpd_client.current_song_name()}")
 
     async with trio.open_nursery() as nursery:

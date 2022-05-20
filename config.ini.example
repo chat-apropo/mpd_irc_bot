@@ -32,3 +32,8 @@ MAX_DOWNLOAD_THREADS = 4
 MAX_AUDIO_LENGTH = 1800
 MAX_FILE_SIZE = 41943040
 YT_VALID_VIDEO_DOMAINS = ["youtube.com", "youtu.be"]
+
+[sonic-pi]
+SONIC_PI_HOST = "127.0.0.1"
+SONIC_PI_PORT = 4557
+SONIC_PI_LIVE_URL = "https://radio.dot.com/playground.ogg"
