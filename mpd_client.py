@@ -14,13 +14,16 @@
 import asyncio
 import datetime
 import logging
+import time
 from pathlib import Path
 from typing import Callable
 
+import mpd
 import trio
 from mpd import MPDClient as Client
 
 NEXT_LIST_LENGTH = 5
+ADD_RETRY_DELAY = 5
 
 logger = logging.getLogger()
 
@@ -151,8 +154,16 @@ class MPDClient:
         return MPDClient.client.playlistinfo((pos, ))[0]["id"]
 
     @dropin
-    def add_at_pos(self, song: str, pos: int):
-        MPDClient.client.add(song)
+    def add_at_pos(self, song: str, pos: int, is_retry: bool = False):
+        try:
+            MPDClient.client.update(song)
+            MPDClient.client.add(song)
+        except mpd.base.CommandError:
+            if is_retry:
+                raise AssertionError("Could not add song to playlist")
+            logger.info(f"New song... Retrying in {ADD_RETRY_DELAY} seconds")
+            time.sleep(ADD_RETRY_DELAY)
+            return self.add_at_pos(song, pos, True)
         status = MPDClient.client.status()
         length = int(status["playlistlength"])
         MPDClient.client.move(length - 1, pos)

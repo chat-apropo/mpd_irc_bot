@@ -192,14 +192,20 @@ def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
         onend_text = _reply_str(
             bot, in_msg, f"{Path(song).stem} has been added to the playlist")
         if in_msg.nick in ADMINS:
-            song_queue.last_pos = song_queue.next_pos()
-            mpd_client.add_at_pos(uri, song_queue.last_pos)
+            pos = song_queue.next_pos()
+            try:
+                mpd_client.add_at_pos(uri, pos)
+                song_queue.last_pos = pos
+            except Exception:
+                onend_text = _reply_str(bot, in_msg, error("Sorry but an error occurred."))
         else:
             try:
                 song_queue.add_song(in_msg.nick, uri)
             except SongQueue.FullUserError:
                 onend_text = _reply_str(
                     bot, in_msg, error("Sorry but your queue is full. Wait until one of your songs finishes and try adding again."))
+            except Exception:
+                onend_text = _reply_str(bot, in_msg, error("Sorry but an error occurred."))
 
         sync_write_fifo(f"[[{in_msg.channel}]] {onend_text}")
 
@@ -457,18 +463,23 @@ async def on_dcc_send(bot: IrcBot, **m):
             return
 
         mpd_client.add_next(uri)
-        onend_msg = f"{m['filename']} has been added to the playlist!"
+        onend_text = f"{m['filename']} has been added to the playlist!"
         if m['nick'] in ADMINS:
-            song_queue.last_pos = song_queue.next_pos()
-            mpd_client.add_at_pos(uri, song_queue.last_pos)
+            pos = song_queue.next_pos()
+            try:
+                mpd_client.add_at_pos(uri, pos)
+                song_queue.last_pos = pos
+            except Exception:
+                onend_text = error("Sorry but an error occurred.")
         else:
             try:
                 song_queue.add_song(m['nick'], uri)
             except SongQueue.FullUserError:
-                onend_msg = error(
-                    "Sorry but your queue is full. Wait until one of your songs finishes and try adding again.")
+                onend_text = error("Sorry but your queue is full. Wait until one of your songs finishes and try adding again.")
+            except Exception:
+                onend_text = error("Sorry but an error occurred.")
         sync_write_fifo(
-            f"[[{m['nick']}]] {onend_msg}")
+            f"[[{m['nick']}]] {onend_text}")
 
     try:
         thread_pool.add_task(on_add)

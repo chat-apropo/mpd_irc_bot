@@ -103,7 +103,11 @@ class SongQueue:
         if len(self.queues[user]) >= self.max_len:
             raise SongQueue.FullUserError()
         pos = self.next_pos()
-        self.mpd_client.add_at_pos(uri, pos)
+        try:
+            self.mpd_client.add_at_pos(uri, pos)
+        except AttributeError:
+            logger.error("Failed to add song to queue")
+            raise AttributeError("Failed to add song to queue")
         song_id = self.mpd_client.get_id_at_pos(pos)
         song = Song(song_id, uri, user)
         self.queues[user].append(song)
