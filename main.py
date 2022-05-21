@@ -10,7 +10,6 @@
 # MIT License
 ################################################################################
 
-# TODO edit icecast password for a source randomly
 
 import datetime
 import logging
@@ -72,10 +71,12 @@ song_queue = SongQueue(MAX_USER_QUEUE_LENGTH, mpd_client)
 thread_pool = ThreadPool(4)
 server = PiServer(SONIC_PI_HOST, SONIC_PI_PORT, None, None, True)
 sonic_pi_users = {}
+sonic_pi_history = {}
 
 
 def paste(text):
     """Paste text to ix.io."""
+    logger.debug(f"Pasting {text=}")
     url = "http://ix.io"
     payload = {'f:1=<-': text}
     response = requests.request("POST", url, data=payload)
@@ -273,9 +274,17 @@ async def pi(bot: IrcBot, args: re.Match, msg: Message):
         sonic_pi_users[msg.nick] = [" ".join(args)]
 
     if msg.nick in sonic_pi_users:
+        # append to history
+        if msg.nick in sonic_pi_history:
+            sonic_pi_history[msg.nick].extend(sonic_pi_users[msg.nick])
+        else:
+            sonic_pi_history[msg.nick] = sonic_pi_users[msg.nick]
+
         await reply(bot, msg, "Your Sonic Pi repl is now off. Sending code to sonic pi...")
         server.run_code("\n".join(sonic_pi_users[msg.nick]))
+        del sonic_pi_users[msg.nick]
         return
+
     sonic_pi_users[msg.nick] = []
     await reply(bot, msg, f"Your Sonic Pi repl is now live at: {SONIC_PI_LIVE_URL}. Type {PREFIX}pi to turn it off and evaluate your code.")
 
@@ -284,12 +293,13 @@ async def stop(bot: IrcBot, args: re.Match, msg: Message):
     server.stop_all_jobs()
     await reply(bot, msg, "Stopping audio...")
 
-@auth_command("paste", "Pastes your sonic pi code")
+@auth_command("paste", "Pastes your sonic pi code and clears your history")
 async def pipaste(bot: IrcBot, args: re.Match, msg: Message):
-    if msg.nick not in sonic_pi_users:
+    if msg.nick not in sonic_pi_history:
         await reply(bot, msg, error("You need to turn on your sonic pi repl first. Use {}pi".format(PREFIX)))
         return
-    await reply(bot, msg, paste(sonic_pi_users[msg.nick]))
+    await reply(bot, msg, paste("\n".join(sonic_pi_history[msg.nick])))
+    del sonic_pi_history[msg.nick]
 
 
 @auth_command("read", "Read code from ix.io paste (or any raw text url)")
