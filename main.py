@@ -15,6 +15,7 @@ import datetime
 import logging
 import os
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import List, Union
 
@@ -34,7 +35,9 @@ from message_server import listen_loop
 from mpd_client import MPDClient, mpd_loop_with_handler
 from parseconf import config
 from playlistmng import SongQueue, ThreadPool
-from sonic_pi import Server as PiServer, NoteNotFound, convert_to_notes
+from sonic_pi import NoteNotFound
+from sonic_pi import Server as PiServer
+from sonic_pi import convert_to_notes
 
 LOGFILE = config["log"]["LOGFILE"]
 if LOGFILE == "None":
@@ -198,7 +201,8 @@ def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
                 mpd_client.add_at_pos(uri, pos)
                 song_queue.last_pos = pos
             except Exception:
-                onend_text = _reply_str(bot, in_msg, error("Sorry but an error occurred."))
+                onend_text = _reply_str(bot, in_msg, error(
+                    "Sorry but an error occurred."))
         else:
             try:
                 song_queue.add_song(in_msg.nick, uri)
@@ -206,7 +210,8 @@ def download_in_thread(bot: IrcBot, in_msg: Message, url: str):
                 onend_text = _reply_str(
                     bot, in_msg, error("Sorry but your queue is full. Wait until one of your songs finishes and try adding again."))
             except Exception:
-                onend_text = _reply_str(bot, in_msg, error("Sorry but an error occurred."))
+                onend_text = _reply_str(bot, in_msg, error(
+                    "Sorry but an error occurred."))
 
         sync_write_fifo(f"[[{in_msg.channel}]] {onend_text}")
 
@@ -264,40 +269,10 @@ async def add(bot: IrcBot, args: re.Match, msg: Message):
 @auth_command("grab", "Grab the mic! Get an icecast password to start streaming", f"{PREFIX}grab - A password will be generated and you will get all the info as a dm.")
 async def grab(bot: IrcBot, args: re.Match, msg: Message):
     # TODO Do icecast stuff
-    pass
+    return "Not implemented"
 
 
-@auth_command("pi", "Toggles sonic pi repl", f"{PREFIX}pi [command]- https://sonic-pi.net/tutorial.html")
-async def pi(bot: IrcBot, args: re.Match, msg: Message):
-    args = utils.m2list(args)
-    if args:
-        sonic_pi_users[msg.nick] = [" ".join(args)]
-
-    if msg.nick in sonic_pi_users:
-        # append to history
-        if msg.nick in sonic_pi_history:
-            sonic_pi_history[msg.nick].extend(sonic_pi_users[msg.nick])
-        else:
-            sonic_pi_history[msg.nick] = sonic_pi_users[msg.nick]
-
-        await reply(bot, msg, "Your Sonic Pi repl is now off. Sending code to sonic pi...")
-        server.run_code("\n".join(sonic_pi_users[msg.nick]))
-        del sonic_pi_users[msg.nick]
-        return
-
-    sonic_pi_users[msg.nick] = []
-    await reply(bot, msg, f"Your Sonic Pi repl is now live at: {SONIC_PI_LIVE_URL}. Type {PREFIX}pi to turn it off and evaluate your code.")
-
-@auth_command("convert", "Convert keyboard characters into sonic pi notes", f"{PREFIX}convert [octave] [±transpose] <letters>  -  Only qwerty layout")
-async def convert(bot: IrcBot, args: re.Match, msg: Message):
-    args = utils.m2list(args)
-    if not args:
-        await reply(bot, msg, error("You need to specify an octave an a string to convert"))
-        return
-    if args[0].isdigit() and (int(args[0]) < 0 or int(args[0]) > 10):
-        await reply(bot, msg, error("The first argument must be between 0 and 10"))
-        return
-
+def convert(*args):
     transpose = 0
     if args[0].isdigit():
         octave = int(args[0])
@@ -313,16 +288,68 @@ async def convert(bot: IrcBot, args: re.Match, msg: Message):
             letters = "".join(args[1:])
         else:
             letters = "".join(args)
-    logger.debug(f"{octave=} {letters=}")
+        logger.debug(f"{octave=} {letters=}")
+        return ", ".join(convert_to_notes(letters, octave, transpose))
+
+
+@auth_command("pi", "Toggles sonic pi repl", f"{PREFIX}pi [command]- https://sonic-pi.net/tutorial.html")
+async def pi(bot: IrcBot, args: re.Match, msg: Message):
+    args = utils.m2list(args)
+    if args:
+        sonic_pi_users[msg.nick] = [" ".join(args)]
+
+    if msg.nick in sonic_pi_users:
+        # append to history
+        if msg.nick in sonic_pi_history:
+            sonic_pi_history[msg.nick].extend(sonic_pi_users[msg.nick])
+        else:
+            sonic_pi_history[msg.nick] = sonic_pi_users[msg.nick]
+
+        # Apply template
+        for i, line in enumerate(deepcopy(sonic_pi_users[msg.nick])):
+            for match in re.findall(r"\$\{([^}]+?)\}", line):
+                try:
+                    replace = convert(*match.split(" "))
+                    sonic_pi_users[msg.nick][i] = sonic_pi_users[msg.nick][i].replace(
+                        "${" + match + "}", replace)
+                    logger.debug(
+                        f"Applying template at {i=} {line=} {match=}, {replace=} {sonic_pi_users[msg.nick][i]=}")
+                except NoteNotFound as e:
+                    await reply(bot, msg, error(f"Could not find note '{e}'"))
+                    del sonic_pi_users[msg.nick]
+                    return
+
+        await reply(bot, msg, "Your Sonic Pi repl is now off. Sending code to sonic pi...")
+        server.run_code("\n".join(sonic_pi_users[msg.nick]))
+        del sonic_pi_users[msg.nick]
+        return
+
+    sonic_pi_users[msg.nick] = []
+    await reply(bot, msg, f"Your Sonic Pi repl is now live at: {SONIC_PI_LIVE_URL}. Type {PREFIX}pi to turn it off and evaluate your code.")
+
+
+@auth_command("convert", "Convert keyboard characters into sonic pi notes", f"{PREFIX}convert [octave] [±transpose] <letters>  -  Only qwerty layout")
+async def cmd_convert(bot: IrcBot, args: re.Match, msg: Message):
+    args = utils.m2list(args)
+    if not args:
+        await reply(bot, msg, error("You need to specify an octave an a string to convert"))
+        return
+    if args[0].isdigit() and (int(args[0]) < 0 or int(args[0]) > 10):
+        await reply(bot, msg, error("The first argument must be between 0 and 10"))
+        return
+
     try:
-        await reply(bot, msg, ", ".join(convert_to_notes(letters, octave, transpose)))
+        res = convert(*args)
+        await reply(bot, msg, res)
     except NoteNotFound as e:
         await reply(bot, msg, error(f"Could not find note for '{e}'"))
+
 
 @auth_command("pstop", "Stops sonic pi audio")
 async def stop(bot: IrcBot, args: re.Match, msg: Message):
     server.stop_all_jobs()
     await reply(bot, msg, "Stopping audio...")
+
 
 @auth_command("paste", "Pastes your sonic pi code and clears your history")
 async def pipaste(bot: IrcBot, args: re.Match, msg: Message):
@@ -340,6 +367,7 @@ async def readurl(bot: IrcBot, args: re.Match, msg: Message):
     except Exception as e:
         await reply(bot, msg, error("Failed to read paste: ") + str(e))
     await reply(bot, msg, "Code has been read and sent!")
+
 
 @utils.arg_command("source", "Shows bot source code url")
 async def source(bot: IrcBot, args: re.Match, msg: Message):
@@ -516,7 +544,8 @@ async def on_dcc_send(bot: IrcBot, **m):
             try:
                 song_queue.add_song(m['nick'], uri)
             except SongQueue.FullUserError:
-                onend_text = error("Sorry but your queue is full. Wait until one of your songs finishes and try adding again.")
+                onend_text = error(
+                    "Sorry but your queue is full. Wait until one of your songs finishes and try adding again.")
             except Exception:
                 onend_text = error("Sorry but an error occurred.")
         sync_write_fifo(
@@ -542,6 +571,7 @@ def all_msgs(args: re.Match, msg: Message):
     if msg.nick not in sonic_pi_users or msg.message.strip().startswith(PREFIX):
         return
     sonic_pi_users[msg.nick].append(args[1])
+
 
 async def onconnect(bot: IrcBot):
     async def message_handler(text):
