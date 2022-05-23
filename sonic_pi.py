@@ -1,5 +1,6 @@
 # Mostly copied from: https://github.com/emlyn/sonic-pi-tool/, under MPL2 license
 
+import collections
 import html
 import logging
 import os
@@ -193,58 +194,86 @@ def eval_stdin(server: Server):
 def eval_file(server: Server, path):
     server.run_code(path.read())
 
+
 def osc(server: Server, path, args):
     server.send_osc(path, args)
 
-notes_map = {
-        'z': ':c1',
-        's': ':cs1',
-        'x': ':d1',
-        'd': ':ds1',
-        'c': ':e1',
-        'v': ':f1',
-        'g': ':fs1',
-        'b': ':g1',
-        'h': ':gs1',
-        'n': ':a1',
-        'j': ':as1',
-        'm': ':b1',
-        ',': ':c2',
-        'l': ':cs2',
-        '.': ':d2',
-        'q': ':c2',
-        '2': ':cs2',
-        'w': ':d2',
-        '3': ':ds2',
-        'e': ':e2',
-        'r': ':f2',
-        '5': ':fs2',
-        't': ':g2',
-        '6': ':gs2',
-        'y': ':a2',
-        '7': ':as2',
-        'u': ':b2',
-        'i': ':c3',
-        '9': ':cs3',
-        'o': ':d3',
-        '0': ':ds3',
-        'p': ':e3',
-        '-': ':fs3',
-}
+
+notes_map_lower = collections.OrderedDict({
+    'z': ':c1',
+    's': ':cs1',
+    'x': ':d1',
+    'd': ':ds1',
+    'c': ':e1',
+    'v': ':f1',
+    'g': ':fs1',
+    'b': ':g1',
+    'h': ':gs1',
+    'n': ':a1',
+    'j': ':as1',
+    'm': ':b1',
+    ',': ':c2',
+    'l': ':cs2',
+    '.': ':d2',
+})
+
+notes_map_upper = collections.OrderedDict({
+    'q': ':c2',
+    '2': ':cs2',
+    'w': ':d2',
+    '3': ':ds2',
+    'e': ':e2',
+    'r': ':f2',
+    '5': ':fs2',
+    't': ':g2',
+    '6': ':gs2',
+    'y': ':a2',
+    '7': ':as2',
+    'u': ':b2',
+    'i': ':c3',
+    '9': ':cs3',
+    'o': ':d3',
+    '0': ':ds3',
+    'p': ':e3',
+    '-': ':fs3',
+})
+
+NOTES = ["c", "cs", "d", "ds", "e", "f", "fs", "g", "gs", "a", "as", "b"]
 
 
 class NoteNotFound(Exception):
     pass
 
-def convert_to_notes(kb_notes: str, octave: int):
+
+def convert_to_notes(kb_notes: str, octave: int, transpose: int = 0) -> [str]:
     notes = []
     for note in kb_notes:
-        if note in notes_map:
-            oct = int(notes_map[note][-1]) + octave - 1
-            name = notes_map[note][:-1]
-            notes.append(f"{name}{oct}")
+        kmap = None
+        if note in notes_map_upper:
+            kmap = notes_map_upper
+        elif note in notes_map_lower:
+            kmap = notes_map_lower
         else:
             raise NoteNotFound(note)
+
+        notes_list = list(kmap.items())
+        note_index = notes_list.index((note, kmap[note]))
+        name = kmap[note][1:-1]
+        in_oct = int(kmap[note][-1])
+        _note_index = NOTES.index(name)
+        _octave = octave
+        if note_index + transpose < 0:
+            name = ":" + NOTES[(_note_index + transpose) % 12]
+            _octave -= (_note_index + transpose) // 12
+        elif note_index + transpose >= len(notes_list):
+            name = ":" + NOTES[(_note_index + transpose) % 12]
+            _octave += (_note_index + transpose) // 12
+        else:
+            name = notes_list[(note_index + transpose) % len(notes_list)][1][:-1]
+            _octave += ((notes_list.index((note, kmap[note])) + transpose) // len(notes_list))
+        oct = int(in_oct) + _octave - 1
+        notes.append(f"{name}{oct}")
+
     return notes
 
 

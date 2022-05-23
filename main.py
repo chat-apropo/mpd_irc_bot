@@ -288,7 +288,7 @@ async def pi(bot: IrcBot, args: re.Match, msg: Message):
     sonic_pi_users[msg.nick] = []
     await reply(bot, msg, f"Your Sonic Pi repl is now live at: {SONIC_PI_LIVE_URL}. Type {PREFIX}pi to turn it off and evaluate your code.")
 
-@auth_command("convert", "Convert keyboard characters into sonic pi notes", f"{PREFIX}convert [octave] <letters>")
+@auth_command("convert", "Convert keyboard characters into sonic pi notes", f"{PREFIX}convert [octave] [±transpose] <letters>  -  Only qwerty layout")
 async def convert(bot: IrcBot, args: re.Match, msg: Message):
     args = utils.m2list(args)
     if not args:
@@ -298,15 +298,24 @@ async def convert(bot: IrcBot, args: re.Match, msg: Message):
         await reply(bot, msg, error("The first argument must be between 0 and 10"))
         return
 
+    transpose = 0
     if args[0].isdigit():
         octave = int(args[0])
-        letters = "".join(args[1:])
+        if args[1][0] in ["+", "-"] and args[1][1:].isdigit():
+            transpose = int(args[1])
+            letters = "".join(args[2:])
+        else:
+            letters = "".join(args[1:])
     else:
         octave = 4
-        letters = "".join(args)
+        if args[0][0] in ["+", "-"] and args[0][1:].isdigit():
+            transpose = int(args[0])
+            letters = "".join(args[1:])
+        else:
+            letters = "".join(args)
     logger.debug(f"{octave=} {letters=}")
     try:
-        await reply(bot, msg, ", ".join(convert_to_notes(letters, octave)))
+        await reply(bot, msg, ", ".join(convert_to_notes(letters, octave, transpose)))
     except NoteNotFound as e:
         await reply(bot, msg, error(f"Could not find note for '{e}'"))
 
