@@ -196,6 +196,57 @@ def eval_file(server: Server, path):
 def osc(server: Server, path, args):
     server.send_osc(path, args)
 
+notes_map = {
+        'z': ':c1',
+        's': ':cs1',
+        'x': ':d1',
+        'd': ':ds1',
+        'c': ':e1',
+        'v': ':f1',
+        'g': ':fs1',
+        'b': ':g1',
+        'h': ':gs1',
+        'n': ':a1',
+        'j': ':as1',
+        'm': ':b1',
+        ',': ':c2',
+        'l': ':cs2',
+        '.': ':d2',
+        'q': ':c2',
+        '2': ':cs2',
+        'w': ':d2',
+        '3': ':ds2',
+        'e': ':e2',
+        'r': ':f2',
+        '5': ':fs2',
+        't': ':g2',
+        '6': ':gs2',
+        'y': ':a2',
+        '7': ':as2',
+        'u': ':b2',
+        'i': ':c3',
+        '9': ':cs3',
+        'o': ':d3',
+        '0': ':ds3',
+        'p': ':e3',
+        '-': ':fs3',
+}
+
+
+class NoteNotFound(Exception):
+    pass
+
+def convert_to_notes(kb_notes: str, octave: int):
+    notes = []
+    for note in kb_notes:
+        if note in notes_map:
+            oct = int(notes_map[note][-1]) + octave - 1
+            name = notes_map[note][:-1]
+            notes.append(f"{name}{oct}")
+        else:
+            raise NoteNotFound(note)
+    return notes
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)

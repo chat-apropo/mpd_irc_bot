@@ -34,7 +34,7 @@ from message_server import listen_loop
 from mpd_client import MPDClient, mpd_loop_with_handler
 from parseconf import config
 from playlistmng import SongQueue, ThreadPool
-from sonic_pi import Server as PiServer
+from sonic_pi import Server as PiServer, NoteNotFound, convert_to_notes
 
 LOGFILE = config["log"]["LOGFILE"]
 if LOGFILE == "None":
@@ -288,7 +288,29 @@ async def pi(bot: IrcBot, args: re.Match, msg: Message):
     sonic_pi_users[msg.nick] = []
     await reply(bot, msg, f"Your Sonic Pi repl is now live at: {SONIC_PI_LIVE_URL}. Type {PREFIX}pi to turn it off and evaluate your code.")
 
-@auth_command("pstop", "Stops sonice pi audio")
+@auth_command("convert", "Convert keyboard characters into sonic pi notes", f"{PREFIX}convert [octave] <letters>")
+async def convert(bot: IrcBot, args: re.Match, msg: Message):
+    args = utils.m2list(args)
+    if not args:
+        await reply(bot, msg, error("You need to specify an octave an a string to convert"))
+        return
+    if args[0].isdigit() and (int(args[0]) < 0 or int(args[0]) > 10):
+        await reply(bot, msg, error("The first argument must be between 0 and 10"))
+        return
+
+    if args[0].isdigit():
+        octave = int(args[0])
+        letters = "".join(args[1:])
+    else:
+        octave = 4
+        letters = "".join(args)
+    logger.debug(f"{octave=} {letters=}")
+    try:
+        await reply(bot, msg, ", ".join(convert_to_notes(letters, octave)))
+    except NoteNotFound as e:
+        await reply(bot, msg, error(f"Could not find note for '{e}'"))
+
+@auth_command("pstop", "Stops sonic pi audio")
 async def stop(bot: IrcBot, args: re.Match, msg: Message):
     server.stop_all_jobs()
     await reply(bot, msg, "Stopping audio...")
