@@ -255,7 +255,7 @@ async def add(bot: IrcBot, args: re.Match, msg: Message):
     if not song_queue.can_add(nick):
         await bot.send_message(
             f"You cannot add more than {MAX_USER_QUEUE_LENGTH} audios. Wait for one of your songs to finish and try again.",
-            nick,
+            msg.channel,
         )
         return
 
@@ -588,9 +588,13 @@ async def onconnect(bot: IrcBot):
             await bot.send_message(text, channel)
 
     async def mpd_player_handler():
-        timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        song_queue.update()
-        await message_handler(f"[{Color(timestamp, fg=Color.random()).str} UTC] - Playing: {mpd_client.current_song_name()}")
+        logger.debug("MPD UPDATE")
+        try:
+            timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            song_queue.update()
+            await message_handler(f"[{Color(timestamp, fg=Color.orange).str} UTC] - Playing: {mpd_client.current_song_name()}")
+        except Exception as e:
+            logger.error(f"MPD UPDATE ERROR: {e=}")
 
     async with trio.open_nursery() as nursery:
         nursery.start_soon(

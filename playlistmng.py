@@ -38,15 +38,18 @@ class ThreadPool:
         self.threads = []
         self.lock = threading.Lock()
 
-    def add_task(self, func, *args, **kwargs):
+    def add_task(self, worker, *args, **kwargs):
         """Add a task to the thread pool."""
         with self.lock:
             if len(self.threads) >= self.max_threads:
                 raise ThreadPool.FullError()
+            def wrapped_worker(*args, **kwargs):
+                worker(*args, **kwargs)
+                self.threads.remove(thread)
             thread = threading.Thread(
-                target=func, args=args, kwargs=kwargs, daemon=True)
-            thread.start()
+                target=wrapped_worker, args=args, kwargs=kwargs, daemon=True)
             self.threads.append(thread)
+            thread.start()
 
     def wait_completion(self):
         """Wait for all threads to complete."""
@@ -88,10 +91,11 @@ class SongQueue:
     def next_pos(self) -> int:
         """Return the position of the next song to be added."""
         pos = self.mpd_client.pos()
+        logger.debug(f"Current position is {pos=}")
         if self.last_pos is None:
             return pos + 1
         max_pos = self.mpd_client.length()
-        return min(self.last_pos + 1, max_pos)
+        return min(max(self.last_pos, pos) + 1, max_pos)
 
     def add_song(self, user: str, uri: str) -> Song:
         """Add a song to the queue.
@@ -168,7 +172,7 @@ class SongQueue:
         """Update the queue by removing songs that are no longer in the user's
         queue.
 
-        A song will be removed when its id is the previous one.
+        A song will be removed when its id is the previous one or the current position is greater than its.
         """
         logger.debug("Updating queue")
         prev_id, id, next_id = self.mpd_client.surrounding_ids()
@@ -178,7 +182,7 @@ class SongQueue:
             for song in deepcopy(self.queues[user]):
                 # Clear all on playlist reset or when the song is the previous
                 logger.debug(f"Checking {song.id=}")
-                if pos == 0 or song.id == prev_id:
+                if pos == 0 or song.id == prev_id or pos > int(self.mpd_client.song_from_id(song.id)['pos']):
                     self.queues[user].remove(song)
                     self.mpd_client.remove_id(song.id)
                     logger.info(

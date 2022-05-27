@@ -129,6 +129,10 @@ class MPDClient:
         return (playlist[int(status['song']) - 1]['id'], status["songid"], status["nextsongid"])
 
     @dropin
+    def song_from_id(self, id):
+        return MPDClient.client.playlistid(id)[0]
+
+    @dropin
     def remove_id(self, id):
         MPDClient.client.deleteid(id)
 
@@ -216,6 +220,8 @@ async def mpd_loop_with_handler(handler: Callable, event: str = "player"):
 
 async def main():
     c = MPDClient('localhost', 6600)
+    prev_id, id, next_id = c.surrounding_ids()
+    print(c.song_from_id(prev_id))
     print(c.current_song())
     print(c.next_songs())
     print(c.playlist())
